@@ -1,0 +1,49 @@
+[package]
+name = "minty"
+version = "0.1.0"
+description = "A distraction-free desktop writing app with music support"
+authors = ["RinX"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "minty_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "migrate"] }
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+
+notify = { version = "6", features = ["macos_fsevent"] }
+pulldown-cmark = "0.10"
+regex = "1"
+once_cell = "1"
+
+fastembed = "5"
+lancedb = "0.27"
+arrow-array = "57"
+arrow-schema = "57"
+thiserror = "2"
+futures = "0.3"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+async-trait = "0.1"
+unicode-segmentation = "1.10"
+whatlang = "0.16"

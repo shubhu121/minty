@@ -1,0 +1,377 @@
+import { useState, useEffect, useCallback, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import "./App.css";
+
+import LexicalEditor from "./components/LexicalEditor";
+import FooterPanel from "./components/FooterPanel";
+import Navbar from "./components/Navbar";
+import FileTreePanel from "./components/FileTreePanel";
+import NotificationContainer from "./components/NotificationContainer";
+import IntroAnimation from "./components/IntroAnimation";
+import SmartSearch from "./components/SmartSearch";
+import ContextPanel from "./components/ContextPanel";
+import AiSettingsPanel from "./components/AiSettingsPanel";
+import RagChat from "./components/RagChat/RagChat";
+import { getNote } from "./lib/tauri";
+
+// Types for writing session
+interface WritingFile {
+  name: string;
+  text: string;
+  font: string;
+  font_size: number;
+  theme: string;
+}
+
+interface AppState {
+  theme: string;
+  font: string;
+  fontSize: number;
+  editorContent: string;
+  autoSave: boolean;
+}
+
+const DEFAULT_THEME = "light";
+const DEFAULT_FONT = "serif";
+const DEFAULT_FONT_SIZE = 20;
+
+function App() {
+  const [appState, setAppState] = useState<AppState>(() => {
+    try {
+      const savedTheme = localStorage.getItem("theme");
+      const savedFont = localStorage.getItem("font");
+      const savedFontSize = localStorage.getItem("fontSize");
+      const savedContent = localStorage.getItem("editorContent");
+      const savedAutoSave = localStorage.getItem("autoSave");
+      return {
+        theme: savedTheme || DEFAULT_THEME,
+        font: savedFont || DEFAULT_FONT,
+        fontSize: savedFontSize ? parseInt(savedFontSize) : DEFAULT_FONT_SIZE,
+        editorContent: savedContent || "",
+        autoSave: savedAutoSave === "true",
+      };
+    } catch (error) {
+      console.error("Error loading saved preferences:", error);
+      return {
+        theme: DEFAULT_THEME,
+        font: DEFAULT_FONT,
+        fontSize: DEFAULT_FONT_SIZE,
+        editorContent: "",
+        autoSave: false,
+      };
+    }
+  });
+
+  const [showHistory, setShowHistory] = useState(false);
+  const [fileList, setFileList] = useState<string[]>([]);
+  const [isSaved, setIsSaved] = useState(true);
+  const [currentFileName, setCurrentFileName] = useState<string | null>(null);
+  // 🧠 Notification state
+  const [notifications, setNotifications] = useState<
+    { id: number; type: "success" | "error" | "info"; message: string }[]
+  >([]);
+
+  // Smart Notes state
+  const [showSmartSearch, setShowSmartSearch] = useState(false);
+  const [showContextPanel, setShowContextPanel] = useState(false);
+  const [showAiSettings, setShowAiSettings] = useState(false);
+  const [showRagChat, setShowRagChat] = useState(false);
+  const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
+
+  const addNotification = (
+    type: "success" | "error" | "info",
+    message: string,
+  ) => {
+    const id = Date.now();
+    setNotifications((prev) => [...prev, { id, type, message }]);
+  };
+
+  const removeNotification = (id: number) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  };
+
+  const saveTimeoutRef = useRef<number | null>(null);
+
+  // Save preferences to localStorage
+  useEffect(() => {
+    try {
+      document.documentElement.dataset.theme = appState.theme;
+      if (appState.theme === "dark") {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
+      localStorage.setItem("theme", appState.theme);
+      localStorage.setItem("font", appState.font);
+      localStorage.setItem("fontSize", appState.fontSize.toString());
+      localStorage.setItem("editorContent", appState.editorContent);
+      localStorage.setItem("autoSave", appState.autoSave.toString());
+
+      if (currentFileName && appState.autoSave) {
+        if (saveTimeoutRef.current !== null) {
+          clearTimeout(saveTimeoutRef.current);
+        }
+        saveTimeoutRef.current = window.setTimeout(() => {
+          handleSave();
+        }, 1000);
+      }
+    } catch (error) {
+      console.error("Error saving preferences:", error);
+    }
+    return () => {
+      if (saveTimeoutRef.current !== null) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [appState, currentFileName]);
+
+  // State updaters
+  const setTheme = useCallback(
+    (theme: string) => setAppState((prev) => ({ ...prev, theme })),
+    [],
+  );
+  const setFont = useCallback(
+    (font: string) => setAppState((prev) => ({ ...prev, font })),
+    [],
+  );
+  const setFontSize = useCallback(
+    (fontSize: number) => setAppState((prev) => ({ ...prev, fontSize })),
+    [],
+  );
+
+  const toggleAutoSave = useCallback(
+    () => setAppState((prev) => ({ ...prev, autoSave: !prev.autoSave })),
+    [],
+  );
+
+  // Track editor changes and mark unsaved
+  const setEditorContent = useCallback((content: string) => {
+    setAppState((prev) => ({ ...prev, editorContent: content }));
+    setIsSaved(false); // mark unsaved whenever content changes
+  }, []);
+
+  // Refresh file list
+  const refreshFileList = useCallback(async () => {
+    try {
+      const files = await invoke<string[]>("list_files");
+      setFileList(files);
+    } catch (error) {
+      console.error("Error loading file list:", error);
+    }
+  }, []);
+
+  // Save session to file
+  const handleSave = useCallback(async (isManual = false) => {
+    try {
+      let fileName = currentFileName;
+
+      // Ask for name only if it's a new file
+      if (!fileName || fileName.trim() === "") {
+        addNotification("error", "Enter file name please!");
+        return;
+      }
+
+      const file: WritingFile = {
+        name: fileName,
+        text: appState.editorContent,
+        font: appState.font,
+        font_size: appState.fontSize,
+        theme: appState.theme,
+      };
+
+      const result = await invoke<string>("save_file", { file });
+      console.log("Save result:", result);
+      if (isManual) {
+        addNotification("success", "File saved successfully!");
+      }
+      setIsSaved(true);
+      refreshFileList();
+    } catch (error) {
+      console.error("Error saving session:", error);
+      addNotification("error", "Error saving file: " + String(error));
+    }
+  }, [appState, currentFileName, refreshFileList]);
+
+  // Load session from file
+  const handleLoadFile = useCallback(async (fileName: string) => {
+    try {
+      const file = await invoke<WritingFile>("load_file", { name: fileName });
+      setAppState((prev) => ({
+        ...prev,
+        editorContent: file.text,
+        font: file.font,
+        fontSize: file.font_size,
+        theme: file.theme,
+      }));
+      setCurrentFileName(fileName);
+      setIsSaved(true); // loaded file is saved
+      setShowHistory(false);
+      console.log("File loaded successfully:", fileName);
+    } catch (error) {
+      console.error("Error loading file:", error);
+      addNotification("error", "Error loding file: " + String(error));
+    }
+  }, []);
+
+  // Delete file
+  const handleDeleteFile = useCallback(
+    async (fileName: string) => {
+      try {
+        await invoke<string>("delete_item", { name: fileName });
+        if (currentFileName === fileName) {
+          setCurrentFileName(null);
+          setIsSaved(true);
+          setEditorContent(""); // reset editor
+        }
+        refreshFileList();
+        addNotification("info", "File deleted successfully.");
+      } catch (error) {
+        console.error("Error deleting file:", error);
+        addNotification("error", "Error deleting file: " + String(error));
+      }
+    },
+    [currentFileName, refreshFileList, setEditorContent],
+  );
+
+  // New session
+  const handleNewSession = useCallback(() => {
+    setEditorContent("");
+    setCurrentFileName(null);
+    setIsSaved(false); // new session is unsaved
+  }, [setEditorContent]);
+
+  const handleSetTimer = useCallback((minutes: number) => {
+    console.log(`Timer set: ${minutes} minutes`);
+  }, []);
+
+  const toggleHistory = useCallback(() => {
+    setShowHistory((prev) => {
+      if (!prev) refreshFileList();
+      return !prev;
+    });
+  }, [refreshFileList]);
+
+  const handleRename = useCallback((newName: string) => {
+    if (newName.trim() !== "") setCurrentFileName(newName);
+  }, []);
+
+  const handlePrint = useCallback(() => {
+    window.print();
+  }, []);
+
+  // Smart Notes: open a note from search results
+  const handleOpenSmartNote = useCallback(async (noteId: string) => {
+    try {
+      const note = await getNote(noteId);
+      setAppState((prev) => ({
+        ...prev,
+        editorContent: note.content,
+      }));
+      setCurrentFileName(note.title);
+      setActiveNoteId(noteId);
+      setIsSaved(true);
+      addNotification("info", `Opened: ${note.title}`);
+    } catch (err) {
+      console.error("Error opening note:", err);
+      addNotification("error", "Failed to open note: " + String(err));
+    }
+  }, []);
+
+  // Global keyboard shortcut: Ctrl+K for search, Ctrl+J to Ask AI
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+        e.preventDefault();
+        setShowSmartSearch((prev) => !prev);
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "j") {
+        e.preventDefault();
+        setShowRagChat((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const [showIntro, setShowIntro] = useState(true);
+
+  if (showIntro) {
+    return <IntroAnimation onComplete={() => setShowIntro(false)} />;
+  }
+
+  return (
+    <div className="app-container min-h-screen flex flex-col bg-[var(--background)] text-[var(--text-color)] transition-colors duration-300 relative">
+      <Navbar
+        theme={appState.theme}
+        setTheme={setTheme}
+        onSave={() => handleSave(true)}
+        onPrint={handlePrint}
+        currentFileName={currentFileName}
+        isSaved={isSaved}
+        onRename={handleRename}
+        autoSave={appState.autoSave}
+        onToggleAutoSave={toggleAutoSave}
+        onOpenSearch={() => setShowSmartSearch(true)}
+        onToggleContext={() => setShowContextPanel((p) => !p)}
+        onOpenAiSettings={() => setShowAiSettings(true)}
+        onOpenRagChat={() => setShowRagChat(true)}
+      />
+
+      <LexicalEditor
+        font={appState.font}
+        fontSize={appState.fontSize}
+        content={appState.editorContent}
+        onContentChange={setEditorContent}
+      />
+
+      <FooterPanel
+        font={appState.font}
+        fontSize={appState.fontSize}
+        setFont={setFont}
+        setFontSize={setFontSize}
+        setNewSession={handleNewSession}
+        setTimer={handleSetTimer}
+        onShowHistory={toggleHistory}
+      />
+
+      {showHistory && (
+        <FileTreePanel
+          files={fileList}
+          onLoadFile={handleLoadFile}
+          onDeleteFile={handleDeleteFile}
+          onClose={() => setShowHistory(false)}
+          isOpen={showHistory}
+          refreshFiles={refreshFileList}
+        />
+      )}
+      <NotificationContainer
+        notifications={notifications}
+        removeNotification={removeNotification}
+      />
+
+      {/* Smart Notes overlays */}
+      <SmartSearch
+        isOpen={showSmartSearch}
+        onClose={() => setShowSmartSearch(false)}
+        onOpenNote={handleOpenSmartNote}
+      />
+      <ContextPanel
+        noteId={activeNoteId}
+        isOpen={showContextPanel}
+        onClose={() => setShowContextPanel(false)}
+        onOpenNote={handleOpenSmartNote}
+      />
+      <AiSettingsPanel
+        isOpen={showAiSettings}
+        onClose={() => setShowAiSettings(false)}
+      />
+      <RagChat
+        isOpen={showRagChat}
+        onClose={() => setShowRagChat(false)}
+        onOpenNote={handleOpenSmartNote}
+      />
+    </div>
+  );
+}
+
+export default App;
